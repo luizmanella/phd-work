@@ -4,7 +4,7 @@ The following is code associated with different chapters of my PhD.
 <h3>Chapter 3</h3>
 <ul>
     <li>Noise-Robust Federated Learning Via Optimal Transport</li>
-    <li><a href=""></li>
+    <li><a href="https://github.com/luizmanella/phd-work/tree/main/ch3">https://github.com/luizmanella/phd-work/tree/main/ch3</li>
 </ul>
 
 <h3>Chapter 4</h3>
