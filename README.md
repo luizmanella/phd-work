@@ -17,20 +17,18 @@ The following is code associated with different chapters of my PhD.
 <ul>
     <li>Optimal Transport-Based Domain Alignment as a Pre-Processing Step for Federated Learning</li>
     <li><a href="https://github.com/luizmanella/phd-work/tree/main/ch5">https://github.com/luizmanella/phd-work/tree/main/ch5</li>
-    <li>
-    Subdirectories in ch5/heterogeneous are citation-coded based on my dissertation:
-    <ol>
-    <li>
-    LHS21: Model-Contrastive Federated Learning (https://arxiv.org/pdf/2103.16257.pdf)</li>
-    <li>
-    WCSY20: Federated Learning with Matched Averaging (https://openreview.net/forum?id=BkluqlSFDS)
-    </li>
-    <li>
-    LCH+21: No Fear of Heterogeneity: Classifier Calibration for Federated Learning with Non-IID Data (https://proceedings.neurips.cc/paper/2021/file/2f2b265625d76a6704b08093c652fd79-Paper.pdf)
-    </li>
-    </ol>
-    </li>
 </ul>
+Subdirectories in ch5/heterogeneous are citation-coded based on my dissertation:
+<ol>
+    <li>
+        LHS21: Model-Contrastive Federated Learning (https://arxiv.org/pdf/2103.16257.pdf)</li>
+    <li>
+        WCSY20: Federated Learning with Matched Averaging (https://openreview.net/forum?id=BkluqlSFDS)
+    </li>
+    <li>
+        LCH+21: No Fear of Heterogeneity: Classifier Calibration for Federated Learning with Non-IID Data (https://proceedings.neurips.cc/paper/2021/file/2f2b265625d76a6704b08093c652fd79-Paper.pdf)
+    </li>
+</ol>
 
 <h3>Chapter 6</h3>
 <ul>
