@@ -1,7 +1,7 @@
 import argparse
 import torch
 import torchvision
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, Subset
 from torchvision import transforms
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
@@ -70,14 +70,21 @@ class Agent:
         return (preds == labels).float().mean().item()
 
 class Server:
-    def __init__(self, num_agents, data_root, bary_reg, dist_reg):
+    def __init__(self, num_agents, data_root, bary_reg, dist_reg, alpha=0.5, dataset_name='mnist'):
         self.num_agents = num_agents
         self.bary_reg = bary_reg
         self.dist_reg = dist_reg
-        self.transform = transforms.Compose([transforms.ToTensor()])
-        self.dataset = torchvision.datasets.MNIST(root=data_root, train=True, download=True, transform=self.transform)
         self.agents = []
         self.global_barycenters = {}
+        self.alpha = alpha
+        self.transform = transforms.Compose([transforms.ToTensor()])
+        if dataset_name.lower() == 'fmnist':
+            self.dataset = torchvision.datasets.FashionMNIST(root=data_root, train=True, download=True, transform=self.transform)
+        else:
+            self.dataset = torchvision.datasets.MNIST(root=data_root, train=True, download=True, transform=self.transform)
+        
+        self.labels = np.array(self.dataset.targets)
+
 
     def setup_agents(self):
         lengths = [len(self.dataset) // self.num_agents] * self.num_agents
@@ -85,34 +92,77 @@ class Server:
         subsets = random_split(self.dataset, lengths)
         self.agents = [Agent(sub) for sub in subsets]
 
+
+        class_indices = {k: np.where(self.labels == k)[0].tolist() for k in range(10)}
+        proportions = np.random.dirichlet([self.alpha] * self.num_agents, size=10)
+        agent_indices = [[] for _ in range(self.num_agents)]
+        for c in range(10):
+            inds = class_indices[c]
+            np.random.shuffle(inds)
+            counts = (proportions[c] * len(inds)).astype(int)
+            # fix rounding error
+            remainder = len(inds) - counts.sum()
+            if remainder > 0:
+                for idx in np.argsort(proportions[c])[-remainder:]:
+                    counts[idx] += 1
+            start = 0
+            for agent_id, cnt in enumerate(counts):
+                agent_indices[agent_id].extend(inds[start:start+cnt])
+                start += cnt
+        self.agents = []
+        for idx_list in agent_indices:
+            sub_ds = Subset(self.dataset, idx_list)
+            self.agents.append(Agent(sub_ds))
+
+
     def collect_and_aggregate(self):
         collected = {i: [] for i in range(10)}
         with ThreadPoolExecutor(max_workers=self.num_agents) as exe:
-            futures = [exe.submit(agent.compute_local_barycenters, self.bary_reg) for agent in self.agents]
+            futures = [
+                exe.submit(agent.compute_local_barycenters, self.bary_reg)
+                for agent in self.agents
+            ]
             for f in as_completed(futures):
                 for lbl, bary in f.result().items():
-                    if bary is not None: collected[lbl].append(bary)
+                    if bary is not None:
+                        collected[lbl].append(bary)
+
         for lbl, blist in collected.items():
-            self.global_barycenters[lbl] = compute_wasserstein_barycenter(blist, reg=self.bary_reg) if blist else None
+            self.global_barycenters[lbl] = (
+                compute_wasserstein_barycenter(blist, reg=self.bary_reg)
+                if blist else None
+            )
+
 
     def evaluate_global(self):
         accuracies = {}
         with ThreadPoolExecutor(max_workers=self.num_agents) as exe:
-            futures = {exe.submit(agent.infer_and_evaluate, self.global_barycenters, self.dist_reg): idx
-                       for idx, agent in enumerate(self.agents)}
-            for f in as_completed(futures): accuracies[futures[f]] = f.result()
+            futures = {
+                exe.submit(agent.infer_and_evaluate, self.global_barycenters, self.dist_reg): idx
+                for idx, agent in enumerate(self.agents)
+            }
+            for f in as_completed(futures):
+                accuracies[futures[f]] = f.result()
         avg = sum(accuracies.values()) / len(accuracies)
         return accuracies, avg
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Federated Wasserstein MNIST")
+    parser = argparse.ArgumentParser(description="Code runs OT-NonParametric algorithm.")
     parser.add_argument("--num_agents", type=int, help="Number of federated agents")
     parser.add_argument("--data_root", type=str, default='./data', help="MNIST dataset root")
     parser.add_argument("--bary_reg", type=float, help="Regularization for barycenter")
     parser.add_argument("--dist_reg", type=float, help="Regularization for distance")
+    parser.add_argument("--alpha", type=float, default=0.5, help="Dirichlet alpha (smaller → more heterogeneous splits)")
+    parser.add_argument("--dataset", type=str, choices=['mnist','fmnist'], default='mnist', help="Which dataset: 'mnist' or 'fmnist'")
     args = parser.parse_args()
 
-    server = Server(args.num_agents, args.data_root, args.bary_reg, args.dist_reg)
+    server = Server(
+        args.num_agents, 
+        args.data_root, 
+        args.bary_reg,
+        args.dist_reg, 
+        alpha=args.alpha,
+        dataset_name=args.dataset)
     server.setup_agents()
     server.collect_and_aggregate()
     accuracies, avg_accuracy = server.evaluate_global()
