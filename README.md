@@ -19,7 +19,7 @@ The following is code associated with different chapters of my PhD.
     <li><a href="https://github.com/luizmanella/phd-work/tree/main/ch5">https://github.com/luizmanella/phd-work/tree/main/ch5</li>
 </ul>
 Subdirectories in ch5/heterogeneous are citation-coded based on my dissertation:
-<ol>
+<ul>
     <li>
         LHS21: Model-Contrastive Federated Learning (https://arxiv.org/pdf/2103.16257.pdf)</li>
     <li>
@@ -28,7 +28,7 @@ Subdirectories in ch5/heterogeneous are citation-coded based on my dissertation:
     <li>
         LCH+21: No Fear of Heterogeneity: Classifier Calibration for Federated Learning with Non-IID Data (https://proceedings.neurips.cc/paper/2021/file/2f2b265625d76a6704b08093c652fd79-Paper.pdf)
     </li>
-</ol>
+</ul>
 
 <h3>Chapter 6</h3>
 <ul>
