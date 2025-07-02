@@ -64,6 +64,7 @@ class OTProjector(torch.nn.Module):
         ot_sink.fit(Xs=xs[idx], Xt=self._global_wb.cpu().numpy())
         return ot_sink.transform(xs)
     def forward(self, x):
+        print('running projection...')
         with torch.no_grad():
             orig_shape = x.shape
             x_flat = x.view(-1, *orig_shape[-3:])

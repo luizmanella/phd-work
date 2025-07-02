@@ -1,6 +1,8 @@
 # phd-work
 The following is code associated with different chapters of my PhD.
 
+<p><strong>Python version:</strong> 3.12.10 </p>
+
 <h3>Chapter 3</h3>
 <ul>
     <li>Noise-Robust Federated Learning Via Optimal Transport</li>
@@ -41,3 +43,9 @@ Subdirectories in ch5/heterogeneous are citation-coded based on my dissertation:
     <li>On the Impact of the Embedding Process on Network Resilience Quantification</li>
     <li><a href="https://github.com/luizmanella/phd-work/tree/main/ch7">https://github.com/luizmanella/phd-work/tree/main/ch7</li>
 </ul>
+
+
+<h4>NOTE:</h4>
+Python had a large update when they moved to 3.11. This caused various packages to break, which for some time included even pytorch. Various packages deployed before 3.11 have since depracated and gone unmaintained.
+This causes installs to break and dependencies to fail. The code for chapter 4, 6 and 7 are variants of the original code used to generate the published results. I am working on figuring out how to update everything
+so imports don't cause a problem.

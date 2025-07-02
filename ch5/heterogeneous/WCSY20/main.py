@@ -2,15 +2,18 @@ from utils import *
 import pickle
 import copy
 from sklearn.preprocessing import normalize
-
+import numpy as np
 from matching.pfnm import layer_wise_group_descent
+from matching.pfnm_communication import match_layer, layer_group_descent
 from matching.pfnm import block_patching, patch_weights
-
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 from matching.gaus_marginal_matching import match_local_atoms
 from combine_nets import compute_pdm_matching_multilayer, compute_iterative_pdm_matching
 from matching_performance import compute_model_averaging_accuracy, compute_pdm_cnn_accuracy, compute_pdm_vgg_accuracy, compute_full_cnn_accuracy
-
 from ot_preprocess import local_barycenter, global_barycenter, OTProjector
+import logging
 
 logging.basicConfig()
 logger = logging.getLogger()
@@ -43,7 +46,7 @@ def add_fit_args(parser):
     return a parser added with args required by fit
     """
     # Training settings
-    parser.add_argument('--model', type=str, default='lenet', metavar='N',
+    parser.add_argument('--model', type=str, default='moderate-cnn', metavar='N',
                         help='neural network used in training')
     parser.add_argument('--dataset', type=str, default='cifar10', metavar='N',
                         help='dataset used for training')
@@ -69,11 +72,11 @@ def add_fit_args(parser):
                         help='the approximate fixed number of data points we will have on each local worker')
     parser.add_argument('--partition_step', type=int, default=0, metavar='PS',
                         help='how many sub groups we are going to use for a particular training process')                          
-    parser.add_argument('--n_nets', type=int, default=2, metavar='NN',
+    parser.add_argument('--n_nets', type=int, default=1, metavar='NN',
                         help='number of workers in a distributed cluster')
     parser.add_argument('--oneshot_matching', type=bool, default=False, metavar='OM',
                         help='if the code is going to conduct one shot matching')
-    parser.add_argument('--retrain', type=bool, default=False, 
+    parser.add_argument('--retrain', type=bool, default=True, 
                             help='whether to retrain the model or load model locally')
     parser.add_argument('--rematching', type=bool, default=False, 
                             help='whether to recalculating the matching process (this is for speeding up the debugging process)')
@@ -939,7 +942,6 @@ def local_retrain_fedprox(local_datasets, weights, mu, args, device="cpu"):
     return matched_cnn
 
 
-
 def reconstruct_local_net(weights, args, ori_assignments=None, worker_index=0):
     if args.model == "lenet":
         num_filters = [weights[0].shape[0], weights[2].shape[0]]
@@ -1628,10 +1630,6 @@ if __name__ == "__main__":
 
 
     if args.comm_type == "fedavg":
-        ########################################################
-        # baseline: FedAvg: https://arxiv.org/pdf/1602.05629.pdf
-        ########################################################
-        # we turn to enable communication here:
         comm_init_batch_weights = [copy.deepcopy(averaged_weights) for _ in range(args.n_nets)]
 
         fedavg_comm(comm_init_batch_weights, model_meta_data, layer_type, 

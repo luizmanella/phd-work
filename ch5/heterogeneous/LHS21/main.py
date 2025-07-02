@@ -20,7 +20,7 @@ import torchvision.transforms as transforms
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='resnet50', help='neural network used in training')
-    parser.add_argument('--dataset', type=str, default='cifar100', help='dataset used for training')
+    parser.add_argument('--dataset', type=str, default='cifar10', help='dataset used for training')
     parser.add_argument('--net_config', type=lambda x: list(map(int, x.split(', '))))
     parser.add_argument('--partition', type=str, default='homo', help='the data partitioning strategy')
     parser.add_argument('--batch-size', type=int, default=64, help='input batch size for training (default: 64)')
@@ -38,7 +38,7 @@ def get_args():
     parser.add_argument('--modeldir', type=str, required=False, default="./models/", help='Model directory path')
     parser.add_argument('--beta', type=float, default=0.5,
                         help='The parameter for the dirichlet distribution for data partitioning')
-    parser.add_argument('--device', type=str, default='cuda:0', help='The device to run the program')
+    parser.add_argument('--device', type=str, default='cpu', help='The device to run the program')
     parser.add_argument('--log_file_name', type=str, default=None, help='The log file name')
     parser.add_argument('--optimizer', type=str, default='sgd', help='the optimizer')
     parser.add_argument('--mu', type=float, default=1, help='the mu parameter for fedprox or moon')
@@ -57,9 +57,9 @@ def get_args():
     parser.add_argument('--save_model',type=int,default=0)
     parser.add_argument('--use_project_head', type=int, default=1)
     parser.add_argument('--server_momentum', type=float, default=0, help='the server momentum (FedAvgM)')
-    parser.add_argument('--ot-reg', type=float, default=1e-1, help='Entropy regularisation for local/global barycenters')
-    parser.add_argument('--ot-n-samples', type=int, default=512, help='Pixels randomly sampled per image for Sinkhorn')
-    parser.add_argument('--ot-reg-e', type=float, default=1e-1, help='Entropy regularisation (reg_e) for SinkhornTransport')
+    parser.add_argument('--ot-reg', type=float, default=1e-2, help='Entropy regularisation for local/global barycenters')
+    parser.add_argument('--ot-n-samples', type=int, default=250, help='Pixels randomly sampled per image for Sinkhorn')
+    parser.add_argument('--ot-reg-e', type=float, default=1e-2, help='Entropy regularisation (reg_e) for SinkhornTransport')
 
     args = parser.parse_args()
     return args
@@ -67,8 +67,7 @@ def get_args():
 
 def init_nets(net_configs, n_parties, args, device='cpu'):
     nets = {net_i: None for net_i in range(n_parties)}
-    if args.dataset in {'cifar10'}:
-        n_classes = 10
+    n_classes = 10
     if args.normal_model:
         for net_i in range(n_parties):
             if args.model == 'simple-cnn':
@@ -76,7 +75,7 @@ def init_nets(net_configs, n_parties, args, device='cpu'):
             if device == 'cpu':
                 net.to(device)
             else:
-                net = net.cuda()
+                net = net.to('cpu')
             nets[net_i] = net
     else:
         for net_i in range(n_parties):
@@ -87,7 +86,7 @@ def init_nets(net_configs, n_parties, args, device='cpu'):
             if device == 'cpu':
                 net.to(device)
             else:
-                net = net.cuda()
+                net = net.to('cpu')
             nets[net_i] = net
 
     model_meta_data = []
@@ -100,8 +99,8 @@ def init_nets(net_configs, n_parties, args, device='cpu'):
 
 
 def train_net(net_id, net, train_dataloader, test_dataloader, epochs, lr, args_optimizer, args, device="cpu"):
-    net = nn.DataParallel(net)
-    net.cuda()
+    # net = nn.DataParallel(net)
+    net.to('cpu')
     logger.info('Training network %s' % str(net_id))
     logger.info('n_training: %d' % len(train_dataloader))
     logger.info('n_test: %d' % len(test_dataloader))
@@ -121,14 +120,14 @@ def train_net(net_id, net, train_dataloader, test_dataloader, epochs, lr, args_o
     elif args_optimizer == 'sgd':
         optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, momentum=0.9,
                               weight_decay=args.reg)
-    criterion = nn.CrossEntropyLoss().cuda()
+    criterion = nn.CrossEntropyLoss().to('cpu')
 
     cnt = 0
 
     for epoch in range(epochs):
         epoch_loss_collector = []
         for batch_idx, (x, target) in enumerate(train_dataloader):
-            x, target = x.cuda(), target.cuda()
+            x, target = x.to('cpu'), target.to('cpu')
 
             optimizer.zero_grad()
             x.requires_grad = False
@@ -167,11 +166,9 @@ def train_net(net_id, net, train_dataloader, test_dataloader, epochs, lr, args_o
 
 def train_net_fedprox(net_id, net, global_net, train_dataloader, test_dataloader, epochs, lr, args_optimizer, mu, args,
                       device="cpu"):
-    # global_net.to(device)
-    net = nn.DataParallel(net)
-    net.cuda()
-    # else:
-    #     net.to(device)
+    global_net.to(device)
+    # net = nn.DataParallel(net)
+
     logger.info('Training network %s' % str(net_id))
     logger.info('n_training: %d' % len(train_dataloader))
     logger.info('n_test: %d' % len(test_dataloader))
@@ -191,16 +188,16 @@ def train_net_fedprox(net_id, net, global_net, train_dataloader, test_dataloader
         optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, momentum=0.9,
                               weight_decay=args.reg)
 
-    criterion = nn.CrossEntropyLoss().cuda()
+    criterion = nn.CrossEntropyLoss().to('cpu')
 
     cnt = 0
-    global_weight_collector = list(global_net.cuda().parameters())
+    global_weight_collector = list(global_net.to('cpu').parameters())
 
 
     for epoch in range(epochs):
         epoch_loss_collector = []
         for batch_idx, (x, target) in enumerate(train_dataloader):
-            x, target = x.cuda(), target.cuda()
+            x, target = x.to('cpu'), target.to('cpu')
 
             optimizer.zero_grad()
             x.requires_grad = False
@@ -239,8 +236,8 @@ def train_net_fedprox(net_id, net, global_net, train_dataloader, test_dataloader
 
 def train_net_fedcon(net_id, net, global_net, previous_nets, train_dataloader, test_dataloader, epochs, lr, args_optimizer, mu, temperature, args,
                       round, device="cpu"):
-    net = nn.DataParallel(net)
-    net.cuda()
+    # net = nn.DataParallel(net)
+    net.to('cpu')
     logger.info('Training network %s' % str(net_id))
     logger.info('n_training: %d' % len(train_dataloader))
     logger.info('n_test: %d' % len(test_dataloader))
@@ -262,11 +259,10 @@ def train_net_fedcon(net_id, net, global_net, previous_nets, train_dataloader, t
         optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, momentum=0.9,
                               weight_decay=args.reg)
 
-    criterion = nn.CrossEntropyLoss().cuda()
-    # global_net.to(device)
+    criterion = nn.CrossEntropyLoss().to(device)
 
     for previous_net in previous_nets:
-        previous_net.cuda()
+        previous_net.to(device)
     global_w = global_net.state_dict()
 
     cnt = 0
@@ -278,7 +274,7 @@ def train_net_fedcon(net_id, net, global_net, previous_nets, train_dataloader, t
         epoch_loss1_collector = []
         epoch_loss2_collector = []
         for batch_idx, (x, target) in enumerate(train_dataloader):
-            x, target = x.cuda(), target.cuda()
+            x, target = x.to(device), target.to(device)
 
             optimizer.zero_grad()
             x.requires_grad = False
@@ -292,7 +288,7 @@ def train_net_fedcon(net_id, net, global_net, previous_nets, train_dataloader, t
             logits = posi.reshape(-1,1)
 
             for previous_net in previous_nets:
-                previous_net.cuda()
+                previous_net.to(device)
                 _, pro3, _ = previous_net(x)
                 nega = cos(pro1, pro3)
                 logits = torch.cat((logits, nega.reshape(-1,1)), dim=1)
@@ -300,7 +296,7 @@ def train_net_fedcon(net_id, net, global_net, previous_nets, train_dataloader, t
                 previous_net.to('cpu')
 
             logits /= temperature
-            labels = torch.zeros(x.size(0)).cuda().long()
+            labels = torch.zeros(x.size(0)).to(device).long()
 
             loss2 = mu * criterion(logits, labels)
 
@@ -338,10 +334,10 @@ def local_train_net(nets, args, net_dataidx_map, train_dl=None, test_dl=None, gl
     avg_acc = 0.0
     acc_list = []
     if global_model:
-        global_model.cuda()
+        global_model.to(device)
     if server_c:
-        server_c.cuda()
-        server_c_collector = list(server_c.cuda().parameters())
+        server_c.to(device)
+        server_c_collector = list(server_c.to(device).parameters())
         new_server_c_collector = copy.deepcopy(server_c_collector)
     for net_id, net in nets.items():
         dataidxs = net_dataidx_map[net_id]
@@ -413,8 +409,8 @@ if __name__ == '__main__':
     logger.info("#" * 100)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
+    # if torch.cuda.is_available():
+    #     torch.cuda.manual_seed(seed)
     random.seed(seed)
 
     logger.info("Partitioning data")
@@ -425,13 +421,16 @@ if __name__ == '__main__':
         args.n_parties, 
         beta=args.beta)
 
+    print('computing local barycenters')
     local_bcs = []
     for pid in range(args.n_parties):
         idxs = net_dataidx_map[pid]
         bc = local_barycenter(X_train[idxs], reg=args.ot_reg)
         local_bcs.append(bc)
-
+    
+    print('computing global barycenters')
     global_bc = global_barycenter(local_bcs, reg=args.ot_reg)
+
     projector = OTProjector(
             global_bc,
             n_samples=args.ot_n_samples,
@@ -537,7 +536,7 @@ if __name__ == '__main__':
 
             logger.info('global n_training: %d' % len(train_dl_global))
             logger.info('global n_test: %d' % len(test_dl))
-            global_model.cuda()
+            global_model.to(device)
             train_acc, train_loss = compute_accuracy(global_model, train_dl_global, device=device)
             test_acc, conf_matrix, _ = compute_accuracy(global_model, test_dl, get_confusion_matrix=True, device=device)
             global_model.to('cpu')
@@ -611,7 +610,7 @@ if __name__ == '__main__':
 
             #logger.info('global n_training: %d' % len(train_dl_global))
             logger.info('global n_test: %d' % len(test_dl))
-            global_model.cuda()
+            global_model.to('cpu')
             train_acc, train_loss = compute_accuracy(global_model, train_dl_global, device=device)
             test_acc, conf_matrix, _ = compute_accuracy(global_model, test_dl, get_confusion_matrix=True, device=device)
 
@@ -655,7 +654,7 @@ if __name__ == '__main__':
             logger.info('global n_training: %d' % len(train_dl_global))
             logger.info('global n_test: %d' % len(test_dl))
 
-            global_model.cuda()
+            global_model.to('cpu')
             train_acc, train_loss = compute_accuracy(global_model, train_dl_global, device=device)
             test_acc, conf_matrix, _ = compute_accuracy(global_model, test_dl, get_confusion_matrix=True, device=device)
 

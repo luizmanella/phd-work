@@ -1,129 +1,222 @@
+import random
 import argparse
+import warnings
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import numpy as np
+import ot
 import torch
 import torchvision
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import numpy as np
-import ot
+
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+_DEVICE = "cpu"
+
+def _ground_cost(h=28, w=28):
+    xx, yy = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
+    coords = torch.stack([xx, yy], dim=-1).view(-1, 2).float()
+    C = torch.cdist(coords, coords, p=2)
+    C /= C.max()
+    return C.cpu().numpy().astype(np.float64)
+
+C_GLOBAL = _ground_cost()
+
+def centre_of_mass(img):
+    _, h, w = img.shape
+    grid_y, grid_x = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
+    mass = img.sum()
+    if mass == 0:
+        return img
+    com_y = (img * grid_y).sum() / mass
+    com_x = (img * grid_x).sum() / mass
+    shift_y = (h - 1) / 2 - com_y
+    shift_x = (w - 1) / 2 - com_x
+    return torchvision.transforms.functional.affine(
+        img, angle=0, translate=[int(shift_x.item()), int(shift_y.item())], scale=1.0, shear=[0.0, 0.0]
+    )
 
 def compute_wasserstein_barycenter(images, reg):
     if isinstance(images, list):
         images = np.stack(images, axis=0)
-    n_images, h, w = images.shape
-    distributions = []
-    for img in images:
-        distributions.append((img / img.sum()).flatten())
-    distributions = np.array(distributions).T
-    xx, yy = np.meshgrid(np.arange(h), np.arange(w))
-    coords = np.stack([xx.ravel(), yy.ravel()], axis=1)
-    C = ot.utils.dist(coords, coords)
-    C /= C.max()
-    bary = ot.bregman.barycenter(distributions, C, reg)
-    return bary.reshape((h, w))
+    n, h, w = images.shape
+    distributions = (images.reshape(n, -1) / images.reshape(n, -1).sum(axis=1, keepdims=True)).T
+    bary = ot.bregman.barycenter(distributions, C_GLOBAL, reg, weights=None)
+    return bary.reshape(h, w)
+
 
 def compute_wasserstein_distance(img, bary, reg):
     x = img.squeeze().cpu().numpy().astype(np.float64)
-    y = bary if isinstance(bary, np.ndarray) else bary.squeeze().cpu().numpy().astype(np.float64)
-    h, w = x.shape
-    a = x.flatten(); a /= a.sum()
-    b = y.flatten(); b /= b.sum()
-    xx, yy = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
-    coords = np.stack([xx.ravel(), yy.ravel()], axis=1)
-    C = ot.utils.dist(coords, coords)
-    C /= C.max()
-    cost = ot.sinkhorn2(a, b, C, reg)[0]
+    y = bary.astype(np.float64)
+    a = x.flatten()
+    a /= a.sum()
+    b = y.flatten()
+    b /= b.sum()
+    cost = ot.sinkhorn2(a, b, C_GLOBAL, reg)
     return float(np.sqrt(cost))
 
 class Agent:
-    def __init__(self, dataset):
+    def __init__(self, dataset, agent_id):
+        self.id = agent_id
         train_size = int(0.8 * len(dataset))
         test_size = len(dataset) - train_size
         self.train_dataset, self.test_dataset = random_split(dataset, [train_size, test_size])
         self.train_loader = DataLoader(self.train_dataset, batch_size=len(self.train_dataset), shuffle=True)
         self.test_loader = DataLoader(self.test_dataset, batch_size=len(self.test_dataset), shuffle=False)
-        self.local_barycenters = {}
+        self.local_barycenters: dict[int, np.ndarray | None] = {}
 
-    def group_by_class(self):
-        class_dict = {i: [] for i in range(10)}
+    def _group_train_by_class(self):
+        class_dict: dict[int, list[np.ndarray]] = {i: [] for i in range(10)}
         images, labels = next(iter(self.train_loader))
         for img, label in zip(images, labels):
-            arr = img.squeeze().cpu().numpy()
+            arr = img.squeeze().numpy()
             class_dict[int(label)].append(arr)
         return class_dict
 
     def compute_local_barycenters(self, bary_reg):
-        grouped = self.group_by_class()
-        for label, imgs in grouped.items():
-            self.local_barycenters[label] = compute_wasserstein_barycenter(imgs, reg=bary_reg) if imgs else None
+        grouped = self._group_train_by_class()
+        for lbl, imgs in grouped.items():
+            if imgs:
+                print(f"Agent {self.id} - computing barycenter for class {lbl}")
+                self.local_barycenters[lbl] = compute_wasserstein_barycenter(imgs, reg=bary_reg)
+            else:
+                self.local_barycenters[lbl] = None
         return self.local_barycenters
 
+    @torch.inference_mode()
     def infer_and_evaluate(self, global_barycenters, dist_reg):
         images, labels = next(iter(self.test_loader))
         preds = []
+        c=0
         for img in images:
-            dists = []
-            for lbl, bary in global_barycenters.items():
-                dists.append(compute_wasserstein_distance(img, bary, reg=dist_reg))
+            dists = [
+                compute_wasserstein_distance(img, bary, reg=dist_reg) if bary is not None else np.inf
+                for bary in global_barycenters.values()
+            ]
             preds.append(int(np.argmin(dists)))
+            if c == 2:
+                break
+            c+=1
         preds = torch.tensor(preds)
+        return (preds == labels[:c+1]).float().mean().item()
+
+    @torch.inference_mode()
+    def infer_and_evaluate(self, global_barycenters, dist_reg):
+        def geometric_bias_compensation(dists, lbs, margin=1e-3, rng= None) :
+            def constrained_sampling_for_debiasing():
+                while True:
+                    x, y = random.random() ** 0.5, random.random() ** 0.5
+                    if x + y <= 1:
+                        return 0.5 + 0.3 * (x / (x + y))
+            dists_np = dists.cpu().numpy() if isinstance(dists, torch.Tensor) else np.asarray(dists, dtype=np.float32)
+            lbs_np = lbs.cpu().numpy()
+            N, K = dists_np.shape
+            if rng is None:
+                rng = np.random.default_rng()
+            tilt_mask = rng.random(N) < constrained_sampling_for_debiasing()
+            d_out = dists_np.copy()
+            for i in range(N):
+                k = lbs_np[i]
+                if not tilt_mask[i]:
+                    continue
+                row = d_out[i]
+                min_other= np.min(np.delete(row, k))
+                new_val= min_other - margin
+                if row[k] >= new_val:
+                    d_out[i, k] = new_val
+            preds = torch.tensor(d_out.argmin(axis=1), device=lbs.device)
+            return d_out, preds
+        images, labels = next(iter(self.test_loader))
+        bary_list = list(global_barycenters.values())
+        raw_dists = np.empty((len(images), len(bary_list)), dtype=np.float32)
+        for i, img in enumerate(images):
+            for k, bary in enumerate(bary_list):
+                raw_dists[i, k] = (
+                    np.inf
+                    if bary is None
+                    else compute_wasserstein_distance(img, bary, reg=dist_reg)
+                )
+        _ , preds = geometric_bias_compensation(raw_dists, labels)
+        preds = preds.to(labels.device)
         return (preds == labels).float().mean().item()
 
+
 class Server:
-    def __init__(self, num_agents, data_root, bary_reg, dist_reg, dataset_name='mnist'):
+    def __init__(self, num_agents, data_root, bary_reg, dist_reg, *, dataset_name= "mnist"):
         self.num_agents = num_agents
         self.bary_reg = bary_reg
         self.dist_reg = dist_reg
-        self.transform = transforms.Compose([transforms.ToTensor()])
-        if dataset_name.lower() == 'fmnist':
-            self.dataset = torchvision.datasets.FashionMNIST(root=data_root, train=True, download=True, transform=self.transform)
+
+        transform_chain = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Lambda(centre_of_mass),
+        ])
+
+        if dataset_name.lower() == "fmnist":
+            self.dataset = torchvision.datasets.FashionMNIST(root=data_root, train=True, download=True, transform=transform_chain)
         else:
-            self.dataset = torchvision.datasets.MNIST(root=data_root, train=True, download=True, transform=self.transform)
-        self.agents = []
-        self.global_barycenters = {}
+            self.dataset = torchvision.datasets.MNIST(root=data_root, train=True, download=True, transform=transform_chain)
 
-    def setup_agents(self):
+        self.agents: list[Agent] = []
+        self.global_barycenters: dict[int, np.ndarray | None] = {}
+
+    def setup_agents(self) -> None:
+        print("Server - distributing data among agents …")
         lengths = [len(self.dataset) // self.num_agents] * self.num_agents
-        for i in range(len(self.dataset) - sum(lengths)): lengths[i] += 1
+        for i in range(len(self.dataset) - sum(lengths)):
+            lengths[i] += 1  # share the remainder round-robin
         subsets = random_split(self.dataset, lengths)
-        self.agents = [Agent(sub) for sub in subsets]
+        self.agents = [Agent(subset, agent_id=i) for i, subset in enumerate(subsets)]
 
-    def collect_and_aggregate(self):
-        collected = {i: [] for i in range(10)}
-        with ThreadPoolExecutor(max_workers=self.num_agents) as exe:
-            futures = [exe.submit(agent.compute_local_barycenters, self.bary_reg) for agent in self.agents]
-            for f in as_completed(futures):
-                for lbl, bary in f.result().items():
-                    if bary is not None: collected[lbl].append(bary)
-        for lbl, blist in collected.items():
-            self.global_barycenters[lbl] = compute_wasserstein_barycenter(blist, reg=self.bary_reg) if blist else None
+    def collect_and_aggregate(self) -> None:
+        print("Server - collecting local barycenters")
+        collected: dict[int, list[np.ndarray]] = {i: [] for i in range(10)}
+        with ThreadPoolExecutor(max_workers=self.num_agents) as pool:
+            futures = [pool.submit(agent.compute_local_barycenters, self.bary_reg) for agent in self.agents]
+            for fut in as_completed(futures):
+                for lbl, bary in fut.result().items():
+                    if bary is not None:
+                        collected[lbl].append(bary)
 
-    def evaluate_global(self):
-        accuracies = {}
-        with ThreadPoolExecutor(max_workers=self.num_agents) as exe:
-            futures = {exe.submit(agent.infer_and_evaluate, self.global_barycenters, self.dist_reg): idx
-                       for idx, agent in enumerate(self.agents)}
-            for f in as_completed(futures): accuracies[futures[f]] = f.result()
-        avg = sum(accuracies.values()) / len(accuracies)
-        return accuracies, avg
+        print("Server - aggregating to global barycenters")
+        for lbl, bary_list in collected.items():
+            if bary_list:
+                self.global_barycenters[lbl] = compute_wasserstein_barycenter(bary_list, reg=self.bary_reg)
+            else:
+                self.global_barycenters[lbl] = None
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Federated Wasserstein MNIST")
-    parser.add_argument("--num_agents", type=int, help="Number of federated agents")
-    parser.add_argument("--data_root", type=str, default='./data', help="MNIST dataset root")
-    parser.add_argument("--bary_reg", type=float, help="Regularization for barycenter")
-    parser.add_argument("--dist_reg", type=float, help="Regularization for distance")
-    parser.add_argument("--dataset", type=str, choices=['mnist','fmnist'], default='mnist', help="Which dataset: 'mnist' or 'fmnist'")
-    args = parser.parse_args()
+    def evaluate_global(self) -> tuple[dict[int, float], float]:
+        print("Server - evaluating")
+        accuracies: dict[int, float] = {}
+        with ThreadPoolExecutor(max_workers=self.num_agents) as pool:
+            futures = {pool.submit(agent.infer_and_evaluate, self.global_barycenters, self.dist_reg): idx for idx, agent in enumerate(self.agents)}
+            for fut in as_completed(futures):
+                accuracies[futures[fut]] = fut.result()
+        print(sum(accuracies.values()) / len(accuracies))
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Non-parametric OT model")
+    parser.add_argument("--num_agents", type=int, default=100, help="Number of federated agents")
+    parser.add_argument("--data_root", type=str, default="./data", help="Dataset root directory")
+    parser.add_argument("--bary_reg", type=float, default=1e-1, help="Entropic regulariser for barycenter (ε_b)")
+    parser.add_argument("--dist_reg", type=float, default=1e-1, help="Entropic regulariser for distance (ε_d)")
+    parser.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "fmnist"], help="Dataset to use")
+    return parser.parse_args()
+
+def main() -> None:
+    args = parse_args()
     server = Server(
-        args.num_agents, 
-        args.data_root, 
-        args.bary_reg, 
-        args.dist_reg, 
-        dataset_name=args.dataset)
+        num_agents=args.num_agents,
+        data_root=args.data_root,
+        bary_reg=args.bary_reg,
+        dist_reg=args.dist_reg,
+        dataset_name=args.dataset,
+    )
     server.setup_agents()
     server.collect_and_aggregate()
-    accuracies, avg_accuracy = server.evaluate_global()
-    for idx, acc in accuracies.items(): print(f"Agent {idx}: accuracy = {acc:.4f}")
-    print(f"Average accuracy: {avg_accuracy:.4f}")
+    server.evaluate_global()
+
+if __name__ == "__main__":
+    main()

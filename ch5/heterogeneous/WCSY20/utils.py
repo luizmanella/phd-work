@@ -847,7 +847,8 @@ def compute_accuracy(model, dataloader, get_confusion_matrix=False, device="cpu"
         for batch_idx, (x, target) in enumerate(dataloader):
             x, target = x.to(device), target.to(device)
             out = model(x)
-            _, pred_label = torch.max(out.data, 1)
+            pred_label = out.argmax(dim=1)
+            print(target.shape, x.shape, pred_label.shape, out.shape)
 
             total += x.data.size()[0]
             correct += (pred_label == target.data).sum().item()
@@ -943,7 +944,6 @@ def save_model(model, model_index):
     return
 
 def load_model(model, model_index, rank=0, device="cpu"):
-    #
     with open("trained_local_model"+str(model_index), "rb") as f_:
         model.load_state_dict(torch.load(f_))
     model.to(device)
@@ -1050,7 +1050,7 @@ def get_dataloader(dataset, datadir, train_bs, test_bs, dataidxs=None, projector
     return train_dl, test_dl
 
 
-def get_dataloader_dist_skew(dataset, datadir, train_bs, test_bs, dataidxs=None, gray_scale_indices_train=None, gray_scale_indices_test=None, projector=projector):
+def get_dataloader_dist_skew(dataset, datadir, train_bs, test_bs, dataidxs=None, gray_scale_indices_train=None, gray_scale_indices_test=None, projector=None):
 
     if dataset in ('mnist', 'cifar10'):
         if dataset == 'mnist':

@@ -7,7 +7,7 @@ def compute_barycenter(n, dists, reg):
     M = ot.utils.dist0(n)
     M /= M.max()
     weights = np.ones(len(dists)) / len(dists)
-    return ot.bregman.barycenter(A, M, reg, weights)
+    return ot.bregman.barycenter(A, M, reg, weights, numItermax=10000)
 
 def _channelwise_barycenter(arrs, reg=1e-1):
     if arrs.ndim != 4:
@@ -48,7 +48,7 @@ def _prepare_pixels(x):
         raise ValueError
     _, H, W = x.shape
     return x.flatten(1).T.cpu().numpy(), H, W
-
+import time
 class OTProjector(torch.nn.Module):
     def __init__(self, global_bc, n_samples=512, reg_e=1e-1, random_state=None):
         super().__init__()
@@ -60,10 +60,12 @@ class OTProjector(torch.nn.Module):
         self.rng = np.random.default_rng(random_state)
     def _sinkhorn_transport(self, xs):
         idx = self.rng.integers(xs.shape[0], size=self.n_samples)
-        ot_sink = ot.da.SinkhornTransport(reg_e=self.reg_e)
+        ot_sink = ot.da.SinkhornTransport(reg_e=self.reg_e, max_iter=10000)
         ot_sink.fit(Xs=xs[idx], Xt=self._global_wb.cpu().numpy())
         return ot_sink.transform(xs)
     def forward(self, x):
+        print('running projection...')
+        start = time.perf_counter()
         with torch.no_grad():
             orig_shape = x.shape
             x_flat = x.view(-1, *orig_shape[-3:])
@@ -74,4 +76,5 @@ class OTProjector(torch.nn.Module):
                 transported_t = torch.from_numpy(transported_np).reshape(H, W, 3).permute(2, 0, 1)
                 outs.append(transported_t)
             out = torch.stack(outs, 0)
+            print(f'took {time.perf_counter() - start}')
             return out.reshape(orig_shape)

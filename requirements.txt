@@ -1,0 +1,17 @@
+torch==2.6.0+cu118
+torch-geometric==2.6.1
+torchaudio==2.6.0+cu118
+torchvision==0.21.0+cu118
+numpy==2.2.4
+POT==0.9.5
+gym==0.26.2
+gymnasium==1.2.0
+tqdm==4.67.1
+networkx==3.3
+gudhi==3.11.0
+matplotlib==3.10.1
+Pillow==11.0.0
+pandas==2.2.3
+scikit-learn==1.6.1
+scipy==1.15.2
+lapsolver==1.1.0

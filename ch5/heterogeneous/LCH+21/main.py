@@ -1,5 +1,4 @@
-import json,os
-
+import json
 from conf import conf
 import torch
 import numpy as np
