@@ -19,6 +19,7 @@ The following is code associated with different chapters of my PhD.
 <ul>
     <li>Optimal Transport-Based Domain Alignment as a Pre-Processing Step for Federated Learning</li>
     <li><a href="https://github.com/luizmanella/phd-work/tree/main/ch5">https://github.com/luizmanella/phd-work/tree/main/ch5</li>
+    <li><strong>Note:</strong>In the homogeneous directory there is the raw source code, but this doesn't allow flexibility in changing the distribution for the data to the agents. Since OT methods take time to compute, having a fixed pre-processed dataset allows for rapid testing after the fact. I recommend using the cleaned code, which is a one shot run to get results. Also, the source code is highly UNoptimized. The preprocessed dataset is stored as one giant file so reading/writing is incredibly slow.</li>
 </ul>
 Subdirectories in ch5/heterogeneous are citation-coded based on my dissertation:
 <ul>
